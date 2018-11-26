@@ -1,0 +1,132 @@
+---
+title: "logistic_regression"
+author: "Hanying Ji - hj2473"
+date: "2018/11/25"
+output: html_document
+---
+
+## Model assumption:
+
+- The outcome is a binary or dichotomous variable like yes/no, positive/negative, 1/0.
+
+- There is no influential values (extreme values or outliers) in the continuous predictors
+
+- There is no high intercorrelations (i.e. multicollinearity) among the predictors.
+
+## Loading required R packages
+```{r}
+library(stats) #glm family
+library(tidyverse) #easy data manipulation and visualization
+library(broom) #creates a tidy data frame from statistical test results
+library(corrplot) #correlation plot
+library(Amelia) #missing value
+library(pscl) #pesudo R2
+theme_set(theme_classic())
+```
+
+## Data preparation
+```{r}
+logistic_data <- read.csv("https://stats.idre.ucla.edu/stat/data/binary.csv")
+head(logistic_data)
+colnames(logistic_data)[which(colnames(logistic_data)=="admit")] <- 'y'
+```
+
+## Missing Value
+```{r}
+#each variable has missing value or not
+sapply(logistic_data, function(x) sum(is.na(x)))
+#missmap
+Amelia::missmap(logistic_data)
+#how many observations have missing value
+sum(apply(logistic_data, 1,function(x) sum(is.na(x))>0))
+  #1. we can drop all the lines with NA if dataset is large enough
+    logistic_data <- na.omit(logistic_data)
+  #2. Other methods(check missing_value.Rmd)
+```
+
+## Check variables class
+```{r}
+class_check <- function(df){
+  for(i in 1:ncol(df)){
+    print(paste(colnames(df)[i],": ",class(df[,i]),sep = ''))
+  }
+}
+class_check(logistic_data)
+```
+
+## collinearity
+```{r}
+# corr for numeric variables
+# (if binary categorical variable, 0/1)
+all_variables <- subset(logistic_data, select = -y)
+correlations <- cor(all_variables)
+corrplot(correlations, method="circle")
+
+# VIF
+vif_value <- rep(0,ncol(all_variables))
+for (i in 1:ncol(all_variables)){
+  vif_value[i] <- VIF(lm(all_variables[,i] ~ . ,data =  all_variables[,-i]))
+}
+highcor <- which(vif_value > 20)
+
+# PCA
+# principle component var > 0.85
+logistic_pca <- princomp( ~., data = all_variables, cor = TRUE, scores = TRUE)
+summary(logistic_pca)
+biplot(logistic_pca)
+# we can choose the points before the changing point as the selected principal component
+screeplot(logistic_pca, type ="lines")
+selenum = 2 # the number of principal components being selected
+pca_data <- as.matrix(all_variables) %*% as.matrix(logistic_pca$loadings[,1:selenum])
+pca_data2 <- logistic_pca$scores[,1:selenum]
+
+```
+
+## check balance of the dataset
+```{r}
+event_rate <- sum(logistic_data$y == 1)/nrow(logistic_data)
+ifelse(max(event_rate, 1-event_rate) > 0.7, "unbalanced", "balanced")
+```
+
+## Build Model
+```{r}
+set.seed(100)
+split = 0.7
+smpl <- sample(1:nrow(logistic_data), nrow(logistic_data)*split)
+train_data <- logistic_data[smpl,]
+test_data <- logistic_data[-smpl, ]
+
+logistic_model <- stats::glm(y~., family=binomial(link='logit'), data=logistic_data)
+summary(logistic_model)
+```
+
+## Goodness of fit
+```{r}
+ifelse(pscl::pR2(logistic_model)['McFadden']>0.2, 
+       "excellent fit", 
+       "Not good fit")
+```
+
+## predict for test data
+```{r}
+logistic_pred <- as.numeric(predict(logistic_model, 
+                                    newdata = test_data[,!(colnames(test_data) %in% "y")], 
+                                    type = "response")>0.5
+                            )
+library(caret)
+confusionMatrix(factor(logistic_pred), factor(test_data$y))
+```
+If high False Negative Rate(Fraud(P) but predict as nonFraud(N)) is the situation we don't desire, higher sensitivity is better.
+If high False Positive Rate(Not potential user(N) but predict as potential(p)) is the situation we don't desire, higher specificity is better.
+
+
+```{r}
+library(ROCR)
+p <- predict(logistic_model, newdata = test_data[,!(colnames(test_data) %in% "y")], type="response")
+pr <- prediction(p, test_data$y)
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+plot(prf)
+auc <- performance(pr, measure = "auc")
+auc <- auc@y.values[[1]]
+auc
+```
